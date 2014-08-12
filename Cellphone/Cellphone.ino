@@ -6,7 +6,7 @@ This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
-
+de
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -15,6 +15,10 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+*/
+
+/*
+2014 07 25 Fabrica
 */
 
 #include <GSM.h>
@@ -44,6 +48,7 @@ GSMScanner scannerNetworks;
 GSM3ClockService clock;
 GSM3VolumeService volume;
 GSM3DTMF dtmf;
+GSMPIN PINManager;
 PhoneBook pb;
 
 #define SCREEN_WIDTH 14
@@ -66,8 +71,10 @@ char keys[ROWS][COLS] = {
   {'7','8','9'},
   {'*','0','#'}
 };  
-byte rowPins[ROWS] = {25, 27, 28, 29, 30, 31};
-byte colPins[COLS] = {26, 24, 23};
+//byte rowPins[ROWS] = {25, 27, 28, 29, 30, 31}; // Original Version
+//byte colPins[COLS] = {26, 24, 23}; // Original Version
+byte rowPins[ROWS] = {22, 23, 31, 0, 1, 2}; // Fabrica Version
+byte colPins[COLS] = {21, 20, 18}; // Fabrica Version
 
 Keypad keypad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
 
@@ -77,6 +84,7 @@ int x = 0, y = 0;
 
 char number[20];
 char name[20];
+char mypin[5];
 
 #define NAME_OR_NUMBER() (name[0] == 0 ? (number[0] == 0 ? "Unknown" : number) : name)
 
@@ -85,7 +93,7 @@ DateTime missedDateTime;
 
 GSM3_voiceCall_st prevVoiceCallStatus;
 
-enum Mode { NOMODE, TEXTALERT, MISSEDCALLALERT, ALARMALERT, LOCKED, HOME, DIAL, PHONEBOOK, EDITENTRY, EDITTEXT, MENU, MISSEDCALLS, RECEIVEDCALLS, DIALEDCALLS, TEXTS, SETTIME, SETALARM };
+enum Mode { NOMODE, TEXTALERT, MISSEDCALLALERT, ALARMALERT, LOCKED, HOME, DIAL, PHONEBOOK, EDITENTRY, EDITTEXT, MENU, MISSEDCALLS, RECEIVEDCALLS, DIALEDCALLS, TEXTS, SETTIME, SETALARM,ENTERSIMPIN,REGISTERING,NOT_CONNECTED };
 Mode mode = LOCKED, prevmode, backmode = mode, interruptedmode = mode, alarminterruptedmode = mode;
 boolean initmode, back, fromalert;
 
@@ -189,54 +197,88 @@ DateTime alarmTime; // note: date isn't used.
 
 boolean unlocking, blank;
 
+boolean auth = false;
+// save input in serial by user
+String user_input = "";
+
 void setup() {
   Serial.begin(9600);
+  PINManager.begin();
 
   // turn on display  
   pinMode(17, OUTPUT);
+  digitalWrite(17, HIGH);
+  delay(250);
+  digitalWrite(17, LOW);
+  delay(200);
+  digitalWrite(17, HIGH);
+  delay(150);
+  digitalWrite(17, LOW);
+  delay(50);
   digitalWrite(17, HIGH);
   
   screen.begin();
   screen.setContrast(contrast);
   screen.clearDisplay();
-  screen.setCursor(0,0);
-  screen.display();
+  
+  
+  
+  //screen.setCursor(0,0);
+  welcomeScreen();
+  //drawRocket();
+  
+  
+  //screen.display();
   
   delay(2000);
+  screen.clearDisplay();
+  mode = NOT_CONNECTED;
   
-  screen.println("connecting...");
-  screen.display();
-  
-  pinMode(4, OUTPUT);
-  
-  // restart the GSM module.
-  // the library will attempt to start the module using pin 7, which is SCK
-  // (and not connected to anything except the ISP header)
-  pinMode(19, OUTPUT);
-  digitalWrite(19, LOW);
-  delay(12000);
-  digitalWrite(19, HIGH);
-  
-  while (gsmAccess.begin(0, false) != GSM_READY) {
-    delay(1000);
-  }
-  screen.println("connected.");
-  screen.display();
-  
-  vcs.hangCall();
-  
-  delay(300);
-  
-  screen.println("caching...");
-  screen.display();
-  
-  cachePhoneBook();
-  
-  screen.println("done.");
-  screen.display();
 }
 
 void loop() {
+
+  if (mode == NOT_CONNECTED || mode == ENTERSIMPIN) 
+  {
+    Serial.println("not_connected");
+    if (mode != REGISTERING)
+    {
+      
+      mode = ENTERSIMPIN;
+      //Serial.println("entersim");
+      screen.setCursor(0,0);
+      screen.setTextColor(BLACK,WHITE);
+     //int pin_query = PINManager.isPIN();
+     //screen.print("(isPIN");screen.print(pin_query);screen.print(")");
+     screen.println(" SIM PIN"); 
+      screen.println("eingeben:");
+      char key = keypad.getKey();
+      screen.println(key);
+      //Serial.println("key");
+      //Serial.println(key);
+      numberInput(key, mypin, sizeof(mypin));
+      softKeys("---", "ok");
+      if (key == 'L') {
+          
+        }
+        if (key == 'R') {
+          screen.println("input done");
+          screen.println(mypin);
+          validateSimPin();
+        }
+     
+     
+     
+     
+     
+     
+      //screen.print("inPIN:");screen.println(pin_query);  
+      
+      
+    }
+  }
+  else 
+  {
   if (vcs.getvoiceCallStatus() == IDLE_CALL && mode == LOCKED) digitalWrite(17, LOW);
   else digitalWrite(17, HIGH);
   
@@ -293,6 +335,7 @@ void loop() {
       if (mode == HOME || (mode == LOCKED && unlocking) || mode == ALARMALERT) {        
         screen.setTextColor(WHITE, BLACK);
         screen.print("     ");
+
         
 //        screen.print(clock.getMonth());
 //        screen.print("/");
@@ -312,7 +355,7 @@ void loop() {
         screen.print("    ");
         
         screen.setTextColor(BLACK);
-        
+
         if (signalQuality != 99)
            for (int i = 1; i <= (signalQuality + 4) / 6; i++)
              screen.drawFastVLine(i, 7 - i, i, WHITE);
@@ -328,7 +371,7 @@ void loop() {
           screen.drawFastHLine(SCREEN_WIDTH * 6 - 5, 6 - i, 3, WHITE);
         }
       }
-      
+
       if (mode == MISSEDCALLALERT) {
         screen.print("Missed: ");
         screen.println(missed);
@@ -802,6 +845,7 @@ void loop() {
   
   prevVoiceCallStatus = voiceCallStatus;
 }
+}
 
 boolean checkForCommandReady(GSM3ShieldV1BaseProvider &provider, int timeout)
 {
@@ -1181,4 +1225,691 @@ int readBandGap()
   
   // combine the two bytes
   return (high << 8) | low;
+}
+void welcomeScreen()
+{
+  screen.drawCircle(10,10,10,BLACK);
+  screen.drawCircle(30,10,10,BLACK);
+  screen.drawCircle(0,0,50,BLACK);
+  for (int16_t i=0; i<screen.height(); i+=2) {
+    screen.drawCircle(screen.width()/2, screen.height()/2, i, BLACK);
+    screen.display();
+    delay(100);
+    screen.clearDisplay();
+  }
+  screen.display();
+  screen.drawPixel(0, 9, BLACK );
+  screen.drawPixel(0, 10, BLACK );
+  screen.drawPixel(0, 11, BLACK );
+  screen.drawPixel(0, 12, BLACK );
+  screen.drawPixel(0, 13, BLACK );
+  screen.drawPixel(0, 14, BLACK );
+  screen.drawPixel(0, 15, BLACK );
+  screen.drawPixel(0, 16, BLACK );
+  screen.drawPixel(0, 17, BLACK );
+  screen.drawPixel(0, 18, BLACK );
+  screen.drawPixel(0, 19, BLACK );
+  screen.drawPixel(0, 20, BLACK );
+  screen.drawPixel(0, 21, BLACK );
+  screen.drawPixel(0, 22, BLACK );
+  screen.drawPixel(0, 23, BLACK );
+  screen.drawPixel(0, 24, BLACK );
+  screen.drawPixel(0, 25, BLACK );
+  screen.drawPixel(0, 26, BLACK );
+  screen.drawPixel(0, 27, BLACK );
+  screen.drawPixel(0, 28, BLACK );
+  screen.drawPixel(0, 29, BLACK );
+  screen.drawPixel(1, 9, BLACK );
+  screen.drawPixel(1, 10, BLACK );
+  screen.drawPixel(1, 11, BLACK );
+  screen.drawPixel(1, 12, BLACK );
+  screen.drawPixel(1, 13, BLACK );
+  screen.drawPixel(1, 14, BLACK );
+  screen.drawPixel(1, 15, BLACK );
+  screen.drawPixel(1, 16, BLACK );
+  screen.drawPixel(1, 17, BLACK );
+  screen.drawPixel(1, 18, BLACK );
+  screen.drawPixel(1, 19, BLACK );
+  screen.drawPixel(1, 20, BLACK );
+  screen.drawPixel(1, 21, BLACK );
+  screen.drawPixel(1, 22, BLACK );
+  screen.drawPixel(1, 23, BLACK );
+  screen.drawPixel(1, 24, BLACK );
+  screen.drawPixel(1, 25, BLACK );
+  screen.drawPixel(1, 26, BLACK );
+  screen.drawPixel(1, 27, BLACK );
+  screen.drawPixel(1, 28, BLACK );
+  screen.drawPixel(1, 29, BLACK );
+  screen.drawPixel(1, 30, BLACK );
+  screen.drawPixel(2, 8, BLACK );
+  screen.drawPixel(2, 9, BLACK );
+  screen.drawPixel(2, 10, BLACK );
+  screen.drawPixel(2, 11, BLACK );
+  screen.drawPixel(2, 12, BLACK );
+  screen.drawPixel(2, 13, BLACK );
+  screen.drawPixel(2, 14, BLACK );
+  screen.drawPixel(2, 15, BLACK );
+  screen.drawPixel(2, 16, BLACK );
+  screen.drawPixel(2, 17, BLACK );
+  screen.drawPixel(2, 18, BLACK );
+  screen.drawPixel(2, 19, BLACK );
+  screen.drawPixel(2, 20, BLACK );
+  screen.drawPixel(2, 21, BLACK );
+  screen.drawPixel(2, 22, BLACK );
+  screen.drawPixel(2, 23, BLACK );
+  screen.drawPixel(2, 24, BLACK );
+  screen.drawPixel(2, 25, BLACK );
+  screen.drawPixel(2, 26, BLACK );
+  screen.drawPixel(2, 27, BLACK );
+  screen.drawPixel(2, 28, BLACK );
+  screen.drawPixel(2, 29, BLACK );
+  screen.drawPixel(2, 30, BLACK );
+  screen.drawPixel(2, 31, BLACK );
+  screen.drawPixel(3, 8, BLACK );
+  screen.drawPixel(3, 9, BLACK );
+  screen.drawPixel(3, 10, BLACK );
+  screen.drawPixel(3, 11, BLACK );
+  screen.drawPixel(3, 12, BLACK );
+  screen.drawPixel(3, 13, BLACK );
+  screen.drawPixel(3, 14, BLACK );
+  screen.drawPixel(3, 15, BLACK );
+  screen.drawPixel(3, 16, BLACK );
+  screen.drawPixel(3, 17, BLACK );
+  screen.drawPixel(3, 18, BLACK );
+  screen.drawPixel(3, 19, BLACK );
+  screen.drawPixel(3, 20, BLACK );
+  screen.drawPixel(3, 21, BLACK );
+  screen.drawPixel(3, 22, BLACK );
+  screen.drawPixel(3, 23, BLACK );
+  screen.drawPixel(3, 24, BLACK );
+  screen.drawPixel(3, 25, BLACK );
+  screen.drawPixel(3, 26, BLACK );
+  screen.drawPixel(3, 27, BLACK );
+  screen.drawPixel(3, 28, BLACK );
+  screen.drawPixel(3, 29, BLACK );
+  screen.drawPixel(3, 30, BLACK );
+  screen.drawPixel(3, 31, BLACK );
+  screen.drawPixel(4, 8, BLACK );
+  screen.drawPixel(4, 9, BLACK );
+  screen.drawPixel(4, 10, BLACK );
+  screen.drawPixel(4, 11, BLACK );
+  screen.drawPixel(4, 12, BLACK );
+  screen.drawPixel(4, 13, BLACK );
+  screen.drawPixel(4, 14, BLACK );
+  screen.drawPixel(4, 15, BLACK );
+  screen.drawPixel(4, 16, BLACK );
+  screen.drawPixel(4, 17, BLACK );
+  screen.drawPixel(4, 18, BLACK );
+  screen.drawPixel(4, 19, BLACK );
+  screen.drawPixel(4, 20, BLACK );
+  screen.drawPixel(4, 21, BLACK );
+  screen.drawPixel(4, 22, BLACK );
+  screen.drawPixel(4, 23, BLACK );
+  screen.drawPixel(4, 24, BLACK );
+  screen.drawPixel(4, 25, BLACK );
+  screen.drawPixel(4, 26, BLACK );
+  screen.drawPixel(4, 27, BLACK );
+  screen.drawPixel(4, 28, BLACK );
+  screen.drawPixel(4, 29, BLACK );
+  screen.drawPixel(4, 30, BLACK );
+  screen.drawPixel(4, 31, BLACK );
+  screen.drawPixel(4, 32, BLACK );
+  screen.drawPixel(5, 7, BLACK );
+  screen.drawPixel(5, 8, BLACK );
+  screen.drawPixel(5, 9, BLACK );
+  screen.drawPixel(5, 10, BLACK );
+  screen.drawPixel(5, 11, BLACK );
+  screen.drawPixel(5, 12, BLACK );
+  screen.drawPixel(5, 13, BLACK );
+  screen.drawPixel(5, 14, BLACK );
+  screen.drawPixel(5, 15, BLACK );
+  screen.drawPixel(5, 16, BLACK );
+  screen.drawPixel(5, 17, BLACK );
+  screen.drawPixel(5, 18, BLACK );
+  screen.drawPixel(5, 19, BLACK );
+  screen.drawPixel(5, 20, BLACK );
+  screen.drawPixel(5, 21, BLACK );
+  screen.drawPixel(5, 22, BLACK );
+  screen.drawPixel(5, 23, BLACK );
+  screen.drawPixel(5, 24, BLACK );
+  screen.drawPixel(5, 25, BLACK );
+  screen.drawPixel(5, 26, BLACK );
+  screen.drawPixel(5, 27, BLACK );
+  screen.drawPixel(5, 28, BLACK );
+  screen.drawPixel(5, 29, BLACK );
+  screen.drawPixel(5, 30, BLACK );
+  screen.drawPixel(5, 31, BLACK );
+  screen.drawPixel(5, 32, BLACK );
+  screen.drawPixel(6, 7, BLACK );
+  screen.drawPixel(6, 8, BLACK );
+  screen.drawPixel(6, 9, BLACK );
+  screen.drawPixel(6, 10, BLACK );
+  screen.drawPixel(6, 11, BLACK );
+  screen.drawPixel(6, 12, BLACK );
+  screen.drawPixel(6, 13, BLACK );
+  screen.drawPixel(6, 14, BLACK );
+  screen.drawPixel(6, 15, BLACK );
+  screen.drawPixel(6, 16, BLACK );
+  screen.drawPixel(6, 17, BLACK );
+  screen.drawPixel(6, 18, BLACK );
+  screen.drawPixel(6, 19, BLACK );
+  screen.drawPixel(6, 20, BLACK );
+  screen.drawPixel(6, 21, BLACK );
+  screen.drawPixel(6, 22, BLACK );
+  screen.drawPixel(6, 23, BLACK );
+  screen.drawPixel(6, 24, BLACK );
+  screen.drawPixel(6, 25, BLACK );
+  screen.drawPixel(6, 26, BLACK );
+  screen.drawPixel(6, 27, BLACK );
+  screen.drawPixel(6, 28, BLACK );
+  screen.drawPixel(6, 29, BLACK );
+  screen.drawPixel(6, 30, BLACK );
+  screen.drawPixel(6, 31, BLACK );
+  screen.drawPixel(6, 32, BLACK );
+  screen.drawPixel(7, 6, BLACK );
+  screen.drawPixel(7, 7, BLACK );
+  screen.drawPixel(7, 8, BLACK );
+  screen.drawPixel(7, 9, BLACK );
+  screen.drawPixel(7, 10, BLACK );
+  screen.drawPixel(7, 11, BLACK );
+  screen.drawPixel(7, 12, BLACK );
+  screen.drawPixel(7, 13, BLACK );
+  screen.drawPixel(7, 14, BLACK );
+  screen.drawPixel(7, 15, BLACK );
+  screen.drawPixel(7, 16, BLACK );
+  screen.drawPixel(7, 17, BLACK );
+  screen.drawPixel(7, 18, BLACK );
+  screen.drawPixel(7, 19, BLACK );
+  screen.drawPixel(7, 33, BLACK );
+  screen.drawPixel(8, 5, BLACK );
+  screen.drawPixel(8, 6, BLACK );
+  screen.drawPixel(8, 7, BLACK );
+  screen.drawPixel(8, 8, BLACK );
+  screen.drawPixel(8, 9, BLACK );
+  screen.drawPixel(8, 10, BLACK );
+  screen.drawPixel(8, 11, BLACK );
+  screen.drawPixel(8, 12, BLACK );
+  screen.drawPixel(8, 13, BLACK );
+  screen.drawPixel(8, 14, BLACK );
+  screen.drawPixel(8, 15, BLACK );
+  screen.drawPixel(8, 16, BLACK );
+  screen.drawPixel(8, 17, BLACK );
+  screen.drawPixel(8, 18, BLACK );
+  screen.drawPixel(8, 19, BLACK );
+  screen.drawPixel(8, 20, BLACK );
+  screen.drawPixel(8, 33, BLACK );
+  screen.drawPixel(9, 5, BLACK );
+  screen.drawPixel(9, 6, BLACK );
+  screen.drawPixel(9, 7, BLACK );
+  screen.drawPixel(9, 8, BLACK );
+  screen.drawPixel(9, 9, BLACK );
+  screen.drawPixel(9, 10, BLACK );
+  screen.drawPixel(9, 11, BLACK );
+  screen.drawPixel(9, 14, BLACK );
+  screen.drawPixel(9, 15, BLACK );
+  screen.drawPixel(9, 16, BLACK );
+  screen.drawPixel(9, 17, BLACK );
+  screen.drawPixel(9, 18, BLACK );
+  screen.drawPixel(9, 19, BLACK );
+  screen.drawPixel(9, 20, BLACK );
+  screen.drawPixel(9, 21, BLACK );
+  screen.drawPixel(9, 34, BLACK );
+  screen.drawPixel(10, 4, BLACK );
+  screen.drawPixel(10, 5, BLACK );
+  screen.drawPixel(10, 6, BLACK );
+  screen.drawPixel(10, 7, BLACK );
+  screen.drawPixel(10, 8, BLACK );
+  screen.drawPixel(10, 9, BLACK );
+  screen.drawPixel(10, 10, BLACK );
+  screen.drawPixel(10, 11, BLACK );
+  screen.drawPixel(10, 15, BLACK );
+  screen.drawPixel(10, 16, BLACK );
+  screen.drawPixel(10, 17, BLACK );
+  screen.drawPixel(10, 18, BLACK );
+  screen.drawPixel(10, 19, BLACK );
+  screen.drawPixel(10, 20, BLACK );
+  screen.drawPixel(10, 21, BLACK );
+  screen.drawPixel(10, 34, BLACK );
+  screen.drawPixel(10, 35, BLACK );
+  screen.drawPixel(11, 4, BLACK );
+  screen.drawPixel(11, 5, BLACK );
+  screen.drawPixel(11, 6, BLACK );
+  screen.drawPixel(11, 7, BLACK );
+  screen.drawPixel(11, 8, BLACK );
+  screen.drawPixel(11, 9, BLACK );
+  screen.drawPixel(11, 10, BLACK );
+  screen.drawPixel(11, 15, BLACK );
+  screen.drawPixel(11, 16, BLACK );
+  screen.drawPixel(11, 17, BLACK );
+  screen.drawPixel(11, 18, BLACK );
+  screen.drawPixel(11, 19, BLACK );
+  screen.drawPixel(11, 20, BLACK );
+  screen.drawPixel(11, 21, BLACK );
+  screen.drawPixel(11, 22, BLACK );
+  screen.drawPixel(11, 35, BLACK );
+  screen.drawPixel(12, 3, BLACK );
+  screen.drawPixel(12, 4, BLACK );
+  screen.drawPixel(12, 5, BLACK );
+  screen.drawPixel(12, 6, BLACK );
+  screen.drawPixel(12, 7, BLACK );
+  screen.drawPixel(12, 8, BLACK );
+  screen.drawPixel(12, 9, BLACK );
+  screen.drawPixel(12, 16, BLACK );
+  screen.drawPixel(12, 17, BLACK );
+  screen.drawPixel(12, 18, BLACK );
+  screen.drawPixel(12, 19, BLACK );
+  screen.drawPixel(12, 20, BLACK );
+  screen.drawPixel(12, 21, BLACK );
+  screen.drawPixel(12, 22, BLACK );
+  screen.drawPixel(12, 36, BLACK );
+  screen.drawPixel(13, 3, BLACK );
+  screen.drawPixel(13, 4, BLACK );
+  screen.drawPixel(13, 5, BLACK );
+  screen.drawPixel(13, 6, BLACK );
+  screen.drawPixel(13, 7, BLACK );
+  screen.drawPixel(13, 8, BLACK );
+  screen.drawPixel(13, 9, BLACK );
+  screen.drawPixel(13, 17, BLACK );
+  screen.drawPixel(13, 18, BLACK );
+  screen.drawPixel(13, 19, BLACK );
+  screen.drawPixel(13, 20, BLACK );
+  screen.drawPixel(13, 21, BLACK );
+  screen.drawPixel(13, 22, BLACK );
+  screen.drawPixel(13, 36, BLACK );
+  screen.drawPixel(13, 37, BLACK );
+  screen.drawPixel(14, 2, BLACK );
+  screen.drawPixel(14, 3, BLACK );
+  screen.drawPixel(14, 4, BLACK );
+  screen.drawPixel(14, 5, BLACK );
+  screen.drawPixel(14, 6, BLACK );
+  screen.drawPixel(14, 7, BLACK );
+  screen.drawPixel(14, 8, BLACK );
+  screen.drawPixel(14, 17, BLACK );
+  screen.drawPixel(14, 18, BLACK );
+  screen.drawPixel(14, 19, BLACK );
+  screen.drawPixel(14, 20, BLACK );
+  screen.drawPixel(14, 21, BLACK );
+  screen.drawPixel(14, 22, BLACK );
+  screen.drawPixel(14, 23, BLACK );
+  screen.drawPixel(14, 37, BLACK );
+  screen.drawPixel(15, 2, BLACK );
+  screen.drawPixel(15, 3, BLACK );
+  screen.drawPixel(15, 4, BLACK );
+  screen.drawPixel(15, 5, BLACK );
+  screen.drawPixel(15, 6, BLACK );
+  screen.drawPixel(15, 7, BLACK );
+  screen.drawPixel(15, 8, BLACK );
+  screen.drawPixel(15, 18, BLACK );
+  screen.drawPixel(15, 19, BLACK );
+  screen.drawPixel(15, 20, BLACK );
+  screen.drawPixel(15, 21, BLACK );
+  screen.drawPixel(15, 22, BLACK );
+  screen.drawPixel(15, 23, BLACK );
+  screen.drawPixel(16, 1, BLACK );
+  screen.drawPixel(16, 2, BLACK );
+  screen.drawPixel(16, 3, BLACK );
+  screen.drawPixel(16, 4, BLACK );
+  screen.drawPixel(16, 5, BLACK );
+  screen.drawPixel(16, 6, BLACK );
+  screen.drawPixel(16, 7, BLACK );
+  screen.drawPixel(16, 18, BLACK );
+  screen.drawPixel(16, 19, BLACK );
+  screen.drawPixel(16, 20, BLACK );
+  screen.drawPixel(16, 21, BLACK );
+  screen.drawPixel(16, 22, BLACK );
+  screen.drawPixel(16, 23, BLACK );
+  screen.drawPixel(16, 24, BLACK );
+  screen.drawPixel(16, 38, BLACK );
+  screen.drawPixel(17, 1, BLACK );
+  screen.drawPixel(17, 2, BLACK );
+  screen.drawPixel(17, 3, BLACK );
+  screen.drawPixel(17, 4, BLACK );
+  screen.drawPixel(17, 5, BLACK );
+  screen.drawPixel(17, 6, BLACK );
+  screen.drawPixel(17, 7, BLACK );
+  screen.drawPixel(17, 18, BLACK );
+  screen.drawPixel(17, 19, BLACK );
+  screen.drawPixel(17, 20, BLACK );
+  screen.drawPixel(17, 21, BLACK );
+  screen.drawPixel(17, 22, BLACK );
+  screen.drawPixel(17, 23, BLACK );
+  screen.drawPixel(17, 24, BLACK );
+  screen.drawPixel(17, 25, BLACK );
+  screen.drawPixel(17, 38, BLACK );
+  screen.drawPixel(18, 0, BLACK );
+  screen.drawPixel(18, 1, BLACK );
+  screen.drawPixel(18, 2, BLACK );
+  screen.drawPixel(18, 3, BLACK );
+  screen.drawPixel(18, 4, BLACK );
+  screen.drawPixel(18, 5, BLACK );
+  screen.drawPixel(18, 6, BLACK );
+  screen.drawPixel(18, 19, BLACK );
+  screen.drawPixel(18, 20, BLACK );
+  screen.drawPixel(18, 21, BLACK );
+  screen.drawPixel(18, 22, BLACK );
+  screen.drawPixel(18, 23, BLACK );
+  screen.drawPixel(18, 24, BLACK );
+  screen.drawPixel(18, 25, BLACK );
+  screen.drawPixel(18, 39, BLACK );
+  screen.drawPixel(19, 0, BLACK );
+  screen.drawPixel(19, 1, BLACK );
+  screen.drawPixel(19, 2, BLACK );
+  screen.drawPixel(19, 3, BLACK );
+  screen.drawPixel(19, 4, BLACK );
+  screen.drawPixel(19, 5, BLACK );
+  screen.drawPixel(19, 6, BLACK );
+  screen.drawPixel(19, 39, BLACK );
+  screen.drawPixel(20, 1, BLACK );
+  screen.drawPixel(20, 2, BLACK );
+  screen.drawPixel(20, 3, BLACK );
+  screen.drawPixel(20, 4, BLACK );
+  screen.drawPixel(20, 5, BLACK );
+  screen.drawPixel(20, 6, BLACK );
+  screen.drawPixel(20, 7, BLACK );
+  screen.drawPixel(20, 38, BLACK );
+  screen.drawPixel(21, 1, BLACK );
+  screen.drawPixel(21, 2, BLACK );
+  screen.drawPixel(21, 3, BLACK );
+  screen.drawPixel(21, 4, BLACK );
+  screen.drawPixel(21, 5, BLACK );
+  screen.drawPixel(21, 6, BLACK );
+  screen.drawPixel(21, 7, BLACK );
+  screen.drawPixel(21, 38, BLACK );
+  screen.drawPixel(22, 2, BLACK );
+  screen.drawPixel(22, 3, BLACK );
+  screen.drawPixel(22, 4, BLACK );
+  screen.drawPixel(22, 5, BLACK );
+  screen.drawPixel(22, 6, BLACK );
+  screen.drawPixel(22, 7, BLACK );
+  screen.drawPixel(23, 3, BLACK );
+  screen.drawPixel(23, 4, BLACK );
+  screen.drawPixel(23, 5, BLACK );
+  screen.drawPixel(23, 6, BLACK );
+  screen.drawPixel(23, 7, BLACK );
+  screen.drawPixel(23, 8, BLACK );
+  screen.drawPixel(23, 37, BLACK );
+  screen.drawPixel(24, 3, BLACK );
+  screen.drawPixel(24, 4, BLACK );
+  screen.drawPixel(24, 5, BLACK );
+  screen.drawPixel(24, 6, BLACK );
+  screen.drawPixel(24, 7, BLACK );
+  screen.drawPixel(24, 8, BLACK );
+  screen.drawPixel(24, 36, BLACK );
+  screen.drawPixel(24, 37, BLACK );
+  screen.drawPixel(25, 3, BLACK );
+  screen.drawPixel(25, 4, BLACK );
+  screen.drawPixel(25, 5, BLACK );
+  screen.drawPixel(25, 6, BLACK );
+  screen.drawPixel(25, 7, BLACK );
+  screen.drawPixel(25, 8, BLACK );
+  screen.drawPixel(25, 9, BLACK );
+  screen.drawPixel(25, 36, BLACK );
+  screen.drawPixel(26, 4, BLACK );
+  screen.drawPixel(26, 5, BLACK );
+  screen.drawPixel(26, 6, BLACK );
+  screen.drawPixel(26, 7, BLACK );
+  screen.drawPixel(26, 8, BLACK );
+  screen.drawPixel(26, 9, BLACK );
+  screen.drawPixel(26, 10, BLACK );
+  screen.drawPixel(26, 35, BLACK );
+  screen.drawPixel(27, 4, BLACK );
+  screen.drawPixel(27, 5, BLACK );
+  screen.drawPixel(27, 6, BLACK );
+  screen.drawPixel(27, 7, BLACK );
+  screen.drawPixel(27, 8, BLACK );
+  screen.drawPixel(27, 9, BLACK );
+  screen.drawPixel(27, 10, BLACK );
+  screen.drawPixel(27, 34, BLACK );
+  screen.drawPixel(27, 35, BLACK );
+  screen.drawPixel(28, 5, BLACK );
+  screen.drawPixel(28, 6, BLACK );
+  screen.drawPixel(28, 7, BLACK );
+  screen.drawPixel(28, 8, BLACK );
+  screen.drawPixel(28, 9, BLACK );
+  screen.drawPixel(28, 10, BLACK );
+  screen.drawPixel(28, 11, BLACK );
+  screen.drawPixel(28, 34, BLACK );
+  screen.drawPixel(29, 5, BLACK );
+  screen.drawPixel(29, 6, BLACK );
+  screen.drawPixel(29, 7, BLACK );
+  screen.drawPixel(29, 8, BLACK );
+  screen.drawPixel(29, 9, BLACK );
+  screen.drawPixel(29, 10, BLACK );
+  screen.drawPixel(29, 11, BLACK );
+  screen.drawPixel(29, 12, BLACK );
+  screen.drawPixel(29, 33, BLACK );
+  screen.drawPixel(30, 6, BLACK );
+  screen.drawPixel(30, 7, BLACK );
+  screen.drawPixel(30, 8, BLACK );
+  screen.drawPixel(30, 9, BLACK );
+  screen.drawPixel(30, 10, BLACK );
+  screen.drawPixel(30, 11, BLACK );
+  screen.drawPixel(30, 12, BLACK );
+  screen.drawPixel(30, 33, BLACK );
+  screen.drawPixel(31, 7, BLACK );
+  screen.drawPixel(31, 8, BLACK );
+  screen.drawPixel(31, 9, BLACK );
+  screen.drawPixel(31, 10, BLACK );
+  screen.drawPixel(31, 11, BLACK );
+  screen.drawPixel(31, 12, BLACK );
+  screen.drawPixel(31, 13, BLACK );
+  screen.drawPixel(32, 7, BLACK );
+  screen.drawPixel(32, 8, BLACK );
+  screen.drawPixel(32, 9, BLACK );
+  screen.drawPixel(32, 10, BLACK );
+  screen.drawPixel(32, 11, BLACK );
+  screen.drawPixel(32, 12, BLACK );
+  screen.drawPixel(32, 32, BLACK );
+  screen.drawPixel(33, 8, BLACK );
+  screen.drawPixel(33, 9, BLACK );
+  screen.drawPixel(33, 10, BLACK );
+  screen.drawPixel(33, 11, BLACK );
+  screen.drawPixel(33, 12, BLACK );
+  screen.drawPixel(33, 32, BLACK );
+  screen.drawPixel(34, 8, BLACK );
+  screen.drawPixel(34, 9, BLACK );
+  screen.drawPixel(34, 10, BLACK );
+  screen.drawPixel(34, 11, BLACK );
+  screen.drawPixel(34, 31, BLACK );
+  screen.drawPixel(35, 8, BLACK );
+  screen.drawPixel(35, 9, BLACK );
+  screen.drawPixel(35, 10, BLACK );
+  screen.drawPixel(35, 30, BLACK );
+  screen.drawPixel(36, 9, BLACK );
+  screen.drawPixel(36, 10, BLACK );
+  screen.drawPixel(36, 30, BLACK );
+  screen.drawPixel(37, 9, BLACK );
+  screen.drawPixel(37, 10, BLACK );
+  screen.drawPixel(37, 11, BLACK );
+  screen.drawPixel(37, 12, BLACK );
+  screen.drawPixel(37, 13, BLACK );
+  screen.drawPixel(37, 14, BLACK );
+  screen.drawPixel(37, 15, BLACK );
+  screen.drawPixel(37, 16, BLACK );
+  screen.drawPixel(37, 17, BLACK );
+  screen.drawPixel(37, 18, BLACK );
+  screen.drawPixel(37, 19, BLACK );
+  screen.drawPixel(37, 20, BLACK );
+  screen.drawPixel(37, 21, BLACK );
+  screen.drawPixel(37, 22, BLACK );
+  screen.drawPixel(37, 23, BLACK );
+  screen.drawPixel(37, 24, BLACK );
+  screen.drawPixel(37, 25, BLACK );
+  screen.drawPixel(37, 26, BLACK );
+  screen.drawPixel(37, 27, BLACK );
+  screen.drawPixel(37, 28, BLACK );
+  screen.drawPixel(37, 29, BLACK );
+  screen.setCursor(0,40);
+  screen.println("[Paulyphone]");
+  screen.display();
+  //delay(6000);
+}
+
+void drawRocket()
+{
+static unsigned char PROGMEM rocket[] =
+{ 
+B00000001, B00000000,
+B00000011, B10000000,
+B00000111, B11000000,
+B00001111, B11100000,
+B00011111, B11110000,
+B00000000, B00000000,
+B00001100, B01100000, };
+int WIDTH=16; 
+int HEIGHT=7; 
+screen.drawBitmap(0, 0,  rocket, WIDTH,HEIGHT, 1);
+}
+
+void registerNet()
+{
+  mode = REGISTERING;
+  screen.clearDisplay();
+  screen.setTextColor(BLACK,WHITE);
+  screen.setCursor(0,0);
+  screen.setTextSize(1);
+  screen.println("verbindet");
+
+  
+  screen.display();
+  
+  pinMode(4, OUTPUT);
+  
+  // restart the GSM module.
+  // the library will attempt to start the module using pin 7, which is SCK
+  // (and not connected to anything except the ISP header)
+  pinMode(19, OUTPUT);
+  digitalWrite(19, LOW);
+  delay(12000);
+  digitalWrite(19, HIGH);
+  /*
+  if(PINManager.checkPIN(mypin) == 0)
+      {
+        //auth = true;
+        PINManager.setPINUsed(true);
+        screen.println("pinok");
+      }
+  else
+      {  
+        Serial.println("Incorrect PIN. Remember that you have 3 opportunities.");
+        screen.println("Incorrect PIN. Remember that you have 3 opportunities.");
+        mode=ENTERSIMPIN;
+      }
+   */
+    
+    if (mode!=ENTERSIMPIN)
+    {
+      //screen.println("vor begin");
+      while (gsmAccess.begin(mypin, true) != GSM_READY) {
+        delay(1000);
+        //todo mode=ENTERSIMPIN falls PIN wrong zurückgemeldet wird.
+      }
+       screen.clearDisplay();
+      screen.println("connected.");
+      screen.display();
+  
+      vcs.hangCall();
+  
+      delay(300);
+  
+      screen.println("caching...");
+      screen.display();
+  
+      cachePhoneBook();
+  
+      screen.println("done.");
+      screen.display();
+      mode = HOME;
+    }
+    else
+    {
+      screen.println("pin wrong");
+    }
+}
+
+
+void validateSimPin()
+{
+
+if (true)
+{
+  registerNet();
+}
+else
+{
+      
+          
+          
+
+  // check if the SIM have pin lock
+  while(!auth){
+    int pin_query = PINManager.isPIN();
+    screen.clearDisplay();
+    screen.println("isPin");
+    screen.println(pin_query);
+    if(pin_query == 1)
+    {
+      // if SIM is locked, enter PIN code
+      Serial.print("Enter PIN code: ");
+      //user_input = readSerial();
+      // check PIN code
+      if(PINManager.checkPIN(mypin) == 0)
+      {
+        auth = true;
+        PINManager.setPINUsed(true);
+        registerNet();
+      }
+      else
+      {  
+        // if PIN code was incorrected
+        Serial.println("Incorrect PIN. Remember that you have 3 opportunities.");
+      }
+    }
+    else if(pin_query == -1)
+    {
+      // PIN code is locked, user must enter PUK code
+      /*Serial.println("PIN locked. Enter PUK code: ");
+      String puk = readSerial();
+      Serial.print("Now, enter a new PIN code: ");
+      user_input = readSerial();
+      // check PUK code
+      if(PINManager.checkPUK(puk, user_input) == 0)
+      {
+        auth = true;
+        PINManager.setPINUsed(true);
+        Serial.println(oktext);
+        registerNet();
+      }
+      else
+      {
+        // if PUK o the new PIN are incorrect
+        Serial.println("Incorrect PUK or invalid new PIN. Try again!.");
+      }
+      */
+    }
+    else if(pin_query == -2)
+    {
+      // the worst case, PIN and PUK are locked
+      Serial.println("PIN & PUK locked. Use PIN2/PUK2 in a mobile phone.");
+      screen.println("PIN & PUK locked. Use PIN2/PUK2 in a mobile phone.");
+      while(true);
+    }
+    else
+    {
+      // SIM does not requires authetication 
+      Serial.println("No pin necessary.");
+      screen.println("No pin necessary.");
+      auth = true;
+    }
+          
+             
+        }
+     
+     
+      
+
+
+}
+
+
 }
